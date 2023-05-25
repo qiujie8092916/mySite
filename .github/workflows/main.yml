@@ -1,0 +1,65 @@
+# /mySite/.github/workflows/main.yml
+
+# 自动化流程命名
+name: Docker Image CI
+
+on:
+	# 主分支（main）的 push，触发该自动化流程
+  push:
+    branches: [ "main" ]
+	# 主分支（main）的  pull_request 事件，触发该自动化流程
+  pull_request:
+    branches: [ "main" ]
+
+# 定义了执行的任务和顺序
+jobs:
+	# 名为 build 的构建任务
+  build:
+  	# 运行在最新版本的 Ubuntu 环境下
+    runs-on: ubuntu-latest
+  	# 任务运行在名为 "production" 的环境中（环境可在项目的 Github 的 Settings 的 Environments 里设置）
+    environment: production
+  	# 设置全局环境变量（完整的镜像名为：[命名空间]/[镜像名字(上面定义的变量名)]:[镜像标签(上面定义的变量标签)]，下面会用到）
+    env:
+    	# 设置镜像名
+      DOCKER_IMAGE_NAME: my-site
+    	# 设置镜像标签，这里使用 git commit 的 hash 作为标签（用于版本记录，回滚操作）
+      DOCKER_IMAGE_TAG: ${{ github.sha }}
+		# `build` 任务执行的步骤
+    steps:
+    	# 使用 actions/checkout@v2 插件从仓库中检出代码
+      - name: Checkout code
+        uses: actions/checkout@v2
+    	# 使用 docker/login-action@v1 插件登录到 Docker Hub
+      - name: Login to Docker Hub
+        uses: docker/login-action@v1
+      	# 该操作需要输入用户名和密码（这里通过 GitHub 的 secrets 管理进行读取）
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_ACCESS_TOKEN }}
+    	# 使用 docker/build-push-action@v2 插件构建并推送 Docker 镜像
+      - name: Build Docker image
+        uses: docker/build-push-action@v2
+        with:
+					# 将刚刚检出的代码作为构建上下文
+          context: .
+        	# 将构建好的镜像推送至 Docker Hub.
+          push: true
+        	# 推送的镜像名
+          tags: ${{ secrets.DOCKER_REPOSITORY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG }}
+    	# 使用 appleboy/ssh-action@master 插件登录到目标服务器上执行 SSH 命令
+      - name: SSH Deploy
+        uses: appleboy/ssh-action@master
+        with:
+        	# 目标服务器地址
+          host: ${{ secrets.SERVER_IP }}
+					# 目标服务器用户名
+          username: ${{ secrets.SERVER_USERNAME }}
+					# 使用 token 登录目标服务器
+          key: ${{ secrets.SERVER_ACCESS_TOKEN }}
+					# 执行 shell 命令
+          script: |
+            docker pull ${{ secrets.DOCKER_REPOSITORY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG }}
+            docker tag ${{ secrets.DOCKER_REPOSITORY }}/${{ env.DOCKER_IMAGE_NAME }}:${{ env.DOCKER_IMAGE_TAG }} ${{ secrets.DOCKER_REPOSITORY }}/${{ env.DOCKER_IMAGE_NAME }}:latest
+            cd ${{ vars.DEVOPS_DOCKER_WORKSPACE }}
+            docker-compose up -d --force-recreate --build ${{ env.DOCKER_IMAGE_NAME }}
